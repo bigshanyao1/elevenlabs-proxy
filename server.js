@@ -16,7 +16,7 @@ console.log('Railway Environment:', process.env.RAILWAY_ENVIRONMENT_NAME || '非
 
 // 基本路由
 app.get('/', (req, res) => {
-    console.log('📞 收到根路径请求');
+    console.log('📞 收到根路径请求 - IP:', req.ip, 'User-Agent:', req.get('User-Agent'));
     res.json({
         status: 'ElevenLabs Proxy Server (Test)',
         version: '1.0-test',
@@ -25,17 +25,28 @@ app.get('/', (req, res) => {
             port: process.env.PORT,
             nodeEnv: process.env.NODE_ENV,
             railway: process.env.RAILWAY_ENVIRONMENT_NAME
+        },
+        request: {
+            ip: req.ip,
+            method: req.method,
+            headers: req.headers
         }
     });
 });
 
 app.get('/health', (req, res) => {
-    console.log('🏥 健康检查请求');
+    console.log('🏥 健康检查请求 - IP:', req.ip);
     res.json({ 
         status: 'healthy', 
         timestamp: new Date().toISOString(),
         uptime: process.uptime()
     });
+});
+
+// 添加所有请求的日志记录
+app.use((req, res, next) => {
+    console.log(`📨 ${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip}`);
+    next();
 });
 
 app.get('/test', (req, res) => {
@@ -133,16 +144,38 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`📍 监听端口: ${PORT}`);
     console.log(`🌐 外部访问: https://elevenlabs-proxy-production.up.railway.app`);
     console.log('⏰ 启动时间:', new Date().toISOString());
+    
+    // 测试服务器是否真的在监听
+    console.log('🔍 服务器监听状态检查:');
+    console.log('  - 地址:', server.address());
+    console.log('  - 端口:', server.address()?.port);
+    console.log('  - 家族:', server.address()?.family);
+});
+
+// 服务器事件监听
+server.on('listening', () => {
+    console.log('✅ 服务器监听事件触发');
+});
+
+server.on('connection', (socket) => {
+    console.log('🔗 新连接建立:', socket.remoteAddress);
+});
+
+server.on('request', (req, res) => {
+    console.log('📥 收到请求:', req.method, req.url);
 });
 
 // 错误处理
 server.on('error', (error) => {
     console.error('💥 服务器启动错误:', error);
+    console.error('错误代码:', error.code);
+    console.error('错误消息:', error.message);
     process.exit(1);
 });
 
 process.on('uncaughtException', (error) => {
     console.error('💥 未捕获异常:', error);
+    console.error('堆栈:', error.stack);
     process.exit(1);
 });
 
@@ -150,5 +183,10 @@ process.on('unhandledRejection', (reason) => {
     console.error('💥 未处理的Promise拒绝:', reason);
     process.exit(1);
 });
+
+// 定期输出状态
+setInterval(() => {
+    console.log(`💓 服务器心跳 - 运行时间: ${Math.floor(process.uptime())}秒`);
+}, 30000);
 
 console.log('✅ 服务器代码加载完成');

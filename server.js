@@ -7,12 +7,26 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// 配置 CORS
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'xi-api-key', 'X-Requested-With']
-}));
+// 配置 CORS - 更宽松的配置
+app.use(cors());
+
+// 处理 OPTIONS 请求
+app.options('*', cors());
+
+// 添加全局 CORS 中间件
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, xi-api-key');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+        return;
+    }
+    
+    next();
+});
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.raw({ type: 'audio/*', limit: '50mb' }));
@@ -21,17 +35,28 @@ app.use(express.raw({ type: 'audio/*', limit: '50mb' }));
 app.get('/', (req, res) => {
     res.json({
         status: 'ElevenLabs Proxy Server',
-        version: '1.0.0',
+        version: '1.1.0',
         timestamp: new Date().toISOString(),
         endpoints: {
             api: '/api/elevenlabs/*',
-            websocket: '/ws/elevenlabs'
+            websocket: '/ws/elevenlabs',
+            test: '/test'
         }
     });
 });
 
 app.get('/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// 测试端点
+app.get('/test', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({ 
+        message: 'ElevenLabs 代理服务器正常运行',
+        timestamp: new Date().toISOString(),
+        cors: 'enabled'
+    });
 });
 
 // ElevenLabs API 代理
@@ -50,13 +75,18 @@ app.all('/api/elevenlabs/*', async (req, res) => {
         const elevenLabsUrl = `https://${targetDomain}${apiPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
         
         console.log(`📡 代理请求: ${req.method} ${apiPath} -> ${targetDomain}`);
+        console.log(`🔗 完整URL: ${elevenLabsUrl}`);
         
         // 准备请求头
         const headers = {
-            'Content-Type': req.headers['content-type'] || 'application/json',
             'User-Agent': 'ElevenLabsProxy/1.0',
-            'Accept': req.headers['accept'] || 'application/json'
+            'Accept': req.headers['accept'] || '*/*'
         };
+        
+        // 只在有内容时设置 Content-Type
+        if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers['content-type']) {
+            headers['Content-Type'] = req.headers['content-type'];
+        }
         
         // 转发认证头
         if (req.headers['xi-api-key']) {
@@ -72,13 +102,9 @@ app.all('/api/elevenlabs/*', async (req, res) => {
             headers['Referer'] = req.headers['referer'];
         }
         
-        if (req.headers['origin']) {
-            headers['Origin'] = req.headers['origin'];
-        }
-        
         // 准备请求体
         let body = undefined;
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
+        if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
             if (req.headers['content-type']?.includes('application/json')) {
                 body = JSON.stringify(req.body);
             } else {
@@ -100,31 +126,47 @@ app.all('/api/elevenlabs/*', async (req, res) => {
         // 处理响应
         const contentType = response.headers.get('content-type');
         
-        // 设置响应头
+        // 设置响应状态和头部
         res.status(response.status);
-        if (contentType) {
-            res.set('Content-Type', contentType);
-        }
         
         // 设置 CORS 头
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         res.set('Access-Control-Allow-Headers', '*');
+        res.set('Access-Control-Allow-Credentials', 'true');
+        
+        if (contentType) {
+            res.set('Content-Type', contentType);
+        }
         
         // 根据内容类型处理响应
         if (contentType?.includes('application/json')) {
             const data = await response.json();
+            console.log(`📄 JSON 响应数据:`, JSON.stringify(data).substring(0, 200) + '...');
             res.json(data);
         } else if (contentType?.includes('audio/')) {
             const buffer = await response.buffer();
+            console.log(`🎵 音频响应，大小: ${buffer.length} bytes`);
             res.send(buffer);
-        } else {
+        } else if (contentType?.includes('text/')) {
             const text = await response.text();
+            console.log(`📝 文本响应:`, text.substring(0, 200) + '...');
             res.send(text);
+        } else {
+            // 对于其他类型，尝试作为 buffer 处理
+            const buffer = await response.buffer();
+            console.log(`📦 其他类型响应，大小: ${buffer.length} bytes`);
+            res.send(buffer);
         }
         
     } catch (error) {
         console.error('❌ ElevenLabs 代理错误:', error.message);
+        console.error('❌ 错误堆栈:', error.stack);
+        
+        // 确保设置 CORS 头，即使在错误情况下
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.set('Access-Control-Allow-Headers', '*');
         
         res.status(500).json({
             error: '代理服务器错误',

@@ -38,14 +38,24 @@ app.get('/health', (req, res) => {
 app.all('/api/elevenlabs/*', async (req, res) => {
     try {
         const apiPath = req.path.replace('/api/elevenlabs', '');
-        const elevenLabsUrl = `https://api.elevenlabs.io${apiPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
         
-        console.log(`📡 代理请求: ${req.method} ${apiPath}`);
+        // 根据请求确定目标域名（优先使用 US 域名）
+        let targetDomain = 'api.us.elevenlabs.io';
+        
+        // 如果是特定路径，可能需要使用不同的域名
+        if (apiPath.includes('/convai/') || apiPath.includes('/agents/')) {
+            targetDomain = 'api.us.elevenlabs.io';
+        }
+        
+        const elevenLabsUrl = `https://${targetDomain}${apiPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
+        
+        console.log(`📡 代理请求: ${req.method} ${apiPath} -> ${targetDomain}`);
         
         // 准备请求头
         const headers = {
             'Content-Type': req.headers['content-type'] || 'application/json',
             'User-Agent': 'ElevenLabsProxy/1.0',
+            'Accept': req.headers['accept'] || 'application/json'
         };
         
         // 转发认证头
@@ -55,6 +65,15 @@ app.all('/api/elevenlabs/*', async (req, res) => {
         
         if (req.headers['authorization']) {
             headers['Authorization'] = req.headers['authorization'];
+        }
+        
+        // 转发其他重要头部
+        if (req.headers['referer']) {
+            headers['Referer'] = req.headers['referer'];
+        }
+        
+        if (req.headers['origin']) {
+            headers['Origin'] = req.headers['origin'];
         }
         
         // 准备请求体
@@ -86,6 +105,11 @@ app.all('/api/elevenlabs/*', async (req, res) => {
         if (contentType) {
             res.set('Content-Type', contentType);
         }
+        
+        // 设置 CORS 头
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.set('Access-Control-Allow-Headers', '*');
         
         // 根据内容类型处理响应
         if (contentType?.includes('application/json')) {
@@ -139,12 +163,16 @@ wss.on('connection', (clientWs, request) => {
         try {
             console.log('🌐 连接到 ElevenLabs WebSocket API');
             
-            elevenLabsWs = new WebSocket('wss://api.elevenlabs.io/v1/convai/conversation', {
+            // 使用 US 域名
+            const wsUrl = 'wss://api.us.elevenlabs.io/v1/convai/conversation';
+            
+            elevenLabsWs = new WebSocket(wsUrl, {
                 headers: {
                     'xi-api-key': apiKey,
-                    'User-Agent': 'ElevenLabsProxy/1.0'
+                    'User-Agent': 'ElevenLabsProxy/1.0',
+                    'Origin': 'https://elevenlabs-proxy-production.up.railway.app'
                 },
-                timeout: 10000
+                timeout: 15000
             });
             
             elevenLabsWs.on('open', () => {
